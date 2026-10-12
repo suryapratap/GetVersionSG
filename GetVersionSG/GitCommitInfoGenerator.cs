@@ -213,31 +213,31 @@ public sealed class GitCommitInfoGenerator : IIncrementalGenerator
             if (!getters.IsDefault)
             {
                 foreach (var getter in getters)
-                {
-                    if (!string.IsNullOrWhiteSpace(getter.Expression))
-                        WriteExpression(builder, getter.Name, getter.Expression);
-                }
+                    WriteExpression(builder, getter);
             }
             builder.AppendLine("}");
             return builder.ToString();
         }
 
-        private static void WriteConstant(StringBuilder builder, string name, string value)
+        private static void WriteConstant(StringBuilder builder, string name, string value) => builder
+            .Append("    public const string ")
+            .Append(name).Append(" = \"")
+            .Append(Escape(value))
+            .AppendLine("\";");
+
+        private static void WriteExpression(StringBuilder builder, GetterDefinition getter)
         {
-            builder.Append("    public const string ").Append(name).Append(" = \"")
-                .Append(Escape(value)).AppendLine("\";");
+            if (string.IsNullOrWhiteSpace(getter.Expression))
+                return;
+
+            builder.Append("    public const string ").Append(getter.Name).Append(" = ")
+                .Append(getter.Expression).AppendLine(";");
         }
 
-        private static void WriteExpression(StringBuilder builder, string name, string expression)
-        {
-            builder.Append("    public const string ").Append(name).Append(" = ")
-                .Append(expression).AppendLine(";");
-        }
-
-        private static string Escape(string value)
-        {
-            return value.Replace("\\", "\\\\").Replace("\"", "\\\"")
-                .Replace("\r", "\\r").Replace("\n", "\\n");
-        }
+        private static string Escape(string value) => value
+            .Replace("\\", "\\\\")
+            .Replace("\"", "\\\"")
+            .Replace("\r", "\\r")
+            .Replace("\n", "\\n");
     }
 }
