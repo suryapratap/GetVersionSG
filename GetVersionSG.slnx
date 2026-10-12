@@ -1,3 +1,5 @@
 <Solution>
   <Project Path="GetVersionSG/GetVersionSG.csproj" />
+  <Project Path="GetVersionSG.Tests/GetVersionSG.Tests.csproj" />
+  <Project Path="Samples/Basic/GetVersionSG.Sample.csproj" />
 </Solution>
