@@ -1,6 +1,11 @@
 <Project>
+  <PropertyGroup>
+    <GetVersionSGBuildId>$([System.DateTime]::UtcNow.Ticks)</GetVersionSGBuildId>
+  </PropertyGroup>
+
   <ItemGroup>
     <Analyzer Include="$(MSBuildThisFileDirectory)..\analyzers\dotnet\cs\GetVersionSG.dll" />
     <AdditionalFiles Include="$(MSBuildProjectDirectory)\*.commit-info" />
+    <CompilerVisibleProperty Include="GetVersionSGBuildId" />
   </ItemGroup>
 </Project>

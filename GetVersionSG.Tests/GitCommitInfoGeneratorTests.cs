@@ -48,8 +48,41 @@ public sealed class GitCommitInfoGeneratorTests
 
         var metadata = GitCommitInfoGenerator.GitMetadata.Read(repositoryPath);
 
+        Assert.Equal("TEST-1\nV0.0.1", metadata.Tags);
+        Assert.Equal("4", metadata.Distance);
+    }
+
+    [Fact]
+    public void GitMetadataFiltersTagsWithWildcardAndKeepsDistance()
+    {
+        var repositoryPath = Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, ".."));
+
+        var metadata = GitCommitInfoGenerator.GitMetadata.Read(repositoryPath, "wildcard:V*");
+
         Assert.Equal("V0.0.1", metadata.Tags);
-        Assert.Equal("3", metadata.Distance);
+        Assert.Equal("4", metadata.Distance);
+    }
+
+    [Fact]
+    public void GitMetadataFiltersTagsWithRegex()
+    {
+        var repositoryPath = Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, ".."));
+
+        var metadata = GitCommitInfoGenerator.GitMetadata.Read(repositoryPath, "regex:^TEST-[0-9]+$");
+
+        Assert.Equal("TEST-1", metadata.Tags);
+        Assert.Equal("4", metadata.Distance);
+    }
+
+    [Fact]
+    public void GitMetadataReturnsDefaultsWhenNoTagMatches()
+    {
+        var repositoryPath = Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, ".."));
+
+        var metadata = GitCommitInfoGenerator.GitMetadata.Read(repositoryPath, "wildcard:no-match-*");
+
+        Assert.Empty(metadata.Tags);
+        Assert.Equal("0", metadata.Distance);
     }
 
     [Fact]
@@ -82,6 +115,76 @@ public sealed class GitCommitInfoGeneratorTests
         Assert.Contains("namespace Demo.Generated;", generated);
         Assert.Contains("public static class BuildInfo", generated);
         Assert.Contains("public const string Version = Tags + \".\" + Distance;", generated);
+    }
+
+    [Fact]
+    public void GeneratorAppliesTagFilterFromCommitInfoFile()
+    {
+        var repositoryPath = Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, "..", "..", "..", ".."));
+        var additionalText = new TestAdditionalText(
+            Path.Combine(repositoryPath, "FilteredBuild.commit-info"),
+            "Demo.Generated\nregex:^V[0-9].*$");
+        var compilation = CSharpCompilation.Create("Demo");
+        GeneratorDriver driver = CSharpGeneratorDriver.Create(new GitCommitInfoGenerator())
+            .AddAdditionalTexts(ImmutableArray.Create<AdditionalText>(additionalText));
+
+        driver = driver.RunGenerators(compilation);
+
+        var generated = driver.GetRunResult().Results.Single().GeneratedSources
+            .Single(source => source.HintName == "FilteredBuild.g.cs").SourceText.ToString();
+        Assert.Contains("public const string Tags = \"V0.0.1\";", generated);
+        Assert.Contains("public const string Distance = \"4\";", generated);
+    }
+
+    [Fact]
+    public void GeneratorReadsInlineGetterFromCommitInfoFile()
+    {
+        var additionalText = new TestAdditionalText(
+            Path.Combine(Environment.CurrentDirectory, "BuildInfo.commit-info"),
+            "Demo.Generated\nV*\n\n[CommitInfoGetter]\npublic static string DefVersion() => $\"{BuildInfo.Tags}-{BuildInfo.Distance}\";");
+        var compilation = CSharpCompilation.Create("Demo");
+        GeneratorDriver driver = CSharpGeneratorDriver.Create(new GitCommitInfoGenerator())
+            .AddAdditionalTexts(ImmutableArray.Create<AdditionalText>(additionalText));
+
+        driver = driver.RunGenerators(compilation);
+
+        var generated = driver.GetRunResult().Results.Single().GeneratedSources
+            .Single(source => source.HintName == "BuildInfo.g.cs").SourceText.ToString();
+        Assert.Contains("public const string DefVersion = $\"{BuildInfo.Tags}-{BuildInfo.Distance}\";", generated);
+    }
+
+    [Fact]
+    public void GeneratorEmitsConfiguredClassWithoutGetters()
+    {
+        var additionalText = new TestAdditionalText(
+            Path.Combine(Environment.CurrentDirectory, "BuildInfo.commit-info"),
+            "Demo.Generated");
+        var compilation = CSharpCompilation.Create("Demo");
+        GeneratorDriver driver = CSharpGeneratorDriver.Create(new GitCommitInfoGenerator())
+            .AddAdditionalTexts(ImmutableArray.Create<AdditionalText>(additionalText));
+
+        driver = driver.RunGenerators(compilation);
+
+        var generated = driver.GetRunResult().Results.Single().GeneratedSources
+            .Single(source => source.HintName == "BuildInfo.g.cs").SourceText.ToString();
+        Assert.Contains("namespace Demo.Generated;", generated);
+        Assert.Contains("public static class BuildInfo", generated);
+        Assert.Contains("public const string CommitHash", generated);
+    }
+
+    [Fact]
+    public void GeneratorEmitsDefaultClassWithoutCommitInfoFile()
+    {
+        var compilation = CSharpCompilation.Create("Demo");
+        GeneratorDriver driver = CSharpGeneratorDriver.Create(new GitCommitInfoGenerator());
+
+        driver = driver.RunGenerators(compilation);
+
+        var generated = driver.GetRunResult().Results.Single().GeneratedSources
+            .Single(source => source.HintName == "GitCommitInfo.g.cs").SourceText.ToString();
+        Assert.Contains("namespace GetVersionSG;", generated);
+        Assert.Contains("public static class GitCommitInfo", generated);
+        Assert.Contains("public const string Distance = \"0\";", generated);
     }
 
     private sealed class TestAdditionalText : AdditionalText

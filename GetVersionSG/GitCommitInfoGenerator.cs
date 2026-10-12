@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -30,15 +32,29 @@ public sealed class GitCommitInfoGenerator : IIncrementalGenerator
 
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
-        var configuration = context.AdditionalTextsProvider
+        var configurations = context.AdditionalTextsProvider
             .Where(static file => file.Path.EndsWith(".commit-info", StringComparison.OrdinalIgnoreCase))
             .Select(static (file, cancellationToken) =>
             {
                 var lines = file.GetText(cancellationToken)?.Lines
                     .Select(line => line.ToString().Trim())
                     .ToArray() ?? Array.Empty<string>();
-                return new CommitInfoConfiguration(file.Path, lines.FirstOrDefault() ?? string.Empty);
-            });
+                return new CommitInfoConfiguration(
+                    file.Path,
+                    lines.FirstOrDefault() ?? string.Empty,
+                    lines.Skip(1).FirstOrDefault() ?? string.Empty,
+                    string.Join(Environment.NewLine, lines.Skip(2)));
+            })
+            .Collect();
+
+        var buildProperties = context.AnalyzerConfigOptionsProvider
+            .Select(static (provider, _) => new BuildProperties(
+                provider.GlobalOptions.TryGetValue("build_property.GetVersionSGBuildId", out var buildId)
+                    ? buildId
+                    : string.Empty,
+                provider.GlobalOptions.TryGetValue("build_property.ProjectDir", out var projectDirectory)
+                    ? projectDirectory
+                    : Directory.GetCurrentDirectory()));
 
         var getters = context.SyntaxProvider
             .CreateSyntaxProvider(
@@ -49,9 +65,21 @@ public sealed class GitCommitInfoGenerator : IIncrementalGenerator
             .Select(static (getter, _) => getter!)
             .Collect();
 
-        context.RegisterSourceOutput(configuration.Combine(getters), static (productionContext, input) =>
+        context.RegisterSourceOutput(
+            configurations.Combine(getters).Combine(buildProperties),
+            static (productionContext, input) =>
         {
-            var config = input.Left;
+            var configurations = input.Left.Left;
+            var getters = input.Left.Right;
+            var buildProperties = input.Right;
+            var config = configurations.Length == 0
+                ? new CommitInfoConfiguration(
+                    Path.Combine(buildProperties.ProjectDirectory, "GitCommitInfo.commit-info"),
+                    "GetVersionSG",
+                    string.Empty,
+                    string.Empty)
+                : configurations[0];
+            var hasConfiguration = configurations.Length > 0;
             if (string.IsNullOrWhiteSpace(config.Namespace))
             {
                 productionContext.ReportDiagnostic(Diagnostic.Create(
@@ -61,15 +89,20 @@ public sealed class GitCommitInfoGenerator : IIncrementalGenerator
                 return;
             }
 
-            var metadata = GitMetadata.Read(Path.GetDirectoryName(config.Path) ?? Directory.GetCurrentDirectory());
+            var metadata = hasConfiguration
+                ? GitMetadata.Read(
+                    Path.GetDirectoryName(config.Path) ?? buildProperties.ProjectDirectory,
+                    config.TagFilter)
+                : new GitMetadata(string.Empty, string.Empty, "0", "HEAD");
             var className = Path.GetFileNameWithoutExtension(config.Path);
-            foreach (var getter in input.Right)
+            var allGetters = getters.AddRange(ReadInlineGetters(config.InlineGetters));
+            foreach (var getter in allGetters)
             {
                 if (string.IsNullOrWhiteSpace(getter.Expression))
                     productionContext.ReportDiagnostic(Diagnostic.Create(InvalidGetter, getter.Location));
             }
 
-            var source = SourceWriter.Write(config.Namespace, className, metadata, input.Right);
+            var source = SourceWriter.Write(config.Namespace, className, metadata, allGetters);
             productionContext.AddSource(className + ".g.cs", source);
         });
 
@@ -87,8 +120,12 @@ public sealed class GitCommitInfoGenerator : IIncrementalGenerator
 
     private static GetterDefinition? ReadGetter(GeneratorSyntaxContext context)
     {
-        var method = (MethodDeclarationSyntax)context.Node;
-        if (!method.AttributeLists.SelectMany(list => list.Attributes)
+        return ReadGetter((MethodDeclarationSyntax)context.Node, true);
+    }
+
+    private static GetterDefinition? ReadGetter(MethodDeclarationSyntax method, bool requireAttribute)
+    {
+        if (requireAttribute && !method.AttributeLists.SelectMany(list => list.Attributes)
             .Any(attribute => attribute.Name.ToString() is "CommitInfoGetter" or "CommitInfoGetterAttribute"))
             return null;
 
@@ -105,16 +142,58 @@ public sealed class GitCommitInfoGenerator : IIncrementalGenerator
         return new GetterDefinition(method.Identifier.ValueText, expression ?? string.Empty, method.GetLocation());
     }
 
+    private static ImmutableArray<GetterDefinition> ReadInlineGetters(string source)
+    {
+        if (string.IsNullOrWhiteSpace(source))
+            return ImmutableArray<GetterDefinition>.Empty;
+
+        var tree = CSharpSyntaxTree.ParseText(source);
+        var method = tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().FirstOrDefault();
+        if (method != null)
+        {
+            var getter = ReadGetter(method, false);
+            if (getter != null && !string.IsNullOrWhiteSpace(getter.Expression))
+                return ImmutableArray.Create(getter);
+        }
+
+        var match = Regex.Match(
+            source,
+            @"public\s+static\s+string\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)\s*=>\s*(?<expression>.*?);",
+            RegexOptions.Singleline);
+        return match.Success
+            ? ImmutableArray.Create(new GetterDefinition(
+                match.Groups["name"].Value,
+                match.Groups["expression"].Value.Trim(),
+                Location.None))
+            : ImmutableArray<GetterDefinition>.Empty;
+    }
+
     private sealed class CommitInfoConfiguration
     {
-        public CommitInfoConfiguration(string path, string @namespace)
+        public CommitInfoConfiguration(string path, string @namespace, string tagFilter, string inlineGetters)
         {
             Path = path;
             Namespace = @namespace;
+            TagFilter = tagFilter;
+            InlineGetters = inlineGetters;
         }
 
         public string Path { get; }
         public string Namespace { get; }
+        public string TagFilter { get; }
+        public string InlineGetters { get; }
+    }
+
+    private sealed class BuildProperties
+    {
+        public BuildProperties(string buildId, string projectDirectory)
+        {
+            BuildId = buildId;
+            ProjectDirectory = projectDirectory;
+        }
+
+        public string BuildId { get; }
+        public string ProjectDirectory { get; }
     }
 
     internal sealed class GetterDefinition
@@ -146,16 +225,21 @@ public sealed class GitCommitInfoGenerator : IIncrementalGenerator
         public string Distance { get; }
         public string BranchName { get; }
 
-        public static GitMetadata Read(string workingDirectory)
+        public static GitMetadata Read(string workingDirectory, string tagFilter = "")
         {
             var commitHash = RunGit(workingDirectory, "rev-parse HEAD");
-            var nearestTag = RunGit(workingDirectory, "describe --tags --abbrev=0 HEAD");
-            var tags = string.IsNullOrWhiteSpace(nearestTag)
+            var matchingTags = FindMatchingTags(workingDirectory, tagFilter);
+            var nearestTag = matchingTags
+                .Select(tag => new { Tag = tag, Distance = RunGit(workingDirectory, "rev-list --count " + tag + "..HEAD") })
+                .Where(result => int.TryParse(result.Distance, out _))
+                .OrderBy(result => int.Parse(result.Distance))
+                .FirstOrDefault();
+            var tags = nearestTag == null
                 ? string.Empty
-                : RunGit(workingDirectory, "tag --points-at " + nearestTag);
-            var distance = string.IsNullOrWhiteSpace(nearestTag)
-                ? "0"
-                : RunGit(workingDirectory, "rev-list --count " + nearestTag + "..HEAD");
+                : string.Join("\n", RunGit(workingDirectory, "tag --points-at " + nearestTag.Tag)
+                    .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Where(tag => MatchesTag(tag, tagFilter)));
+            var distance = nearestTag?.Distance ?? "0";
             var branch = RunGit(workingDirectory, "rev-parse --abbrev-ref HEAD");
 
             return new GitMetadata(
@@ -163,6 +247,39 @@ public sealed class GitCommitInfoGenerator : IIncrementalGenerator
                 string.IsNullOrWhiteSpace(tags) ? "" : tags,
                 string.IsNullOrWhiteSpace(distance) ? "0" : distance,
                 string.IsNullOrWhiteSpace(branch) ? "HEAD" : branch);
+        }
+
+        private static string[] FindMatchingTags(string workingDirectory, string tagFilter)
+        {
+            var tags = RunGit(workingDirectory, "tag --merged HEAD")
+                .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            return tags.Where(tag => MatchesTag(tag, tagFilter)).ToArray();
+        }
+
+        private static bool MatchesTag(string tag, string tagFilter)
+        {
+            if (string.IsNullOrWhiteSpace(tagFilter))
+                return true;
+
+            var separator = tagFilter.IndexOf(':');
+            var kind = separator < 0 ? "wildcard" : tagFilter.Substring(0, separator);
+            var pattern = separator < 0 ? tagFilter : tagFilter.Substring(separator + 1);
+            try
+            {
+                return kind.Equals("regex", StringComparison.OrdinalIgnoreCase)
+                    ? Regex.IsMatch(tag, pattern)
+                    : WildcardMatches(tag, pattern);
+            }
+            catch (ArgumentException)
+            {
+                return false;
+            }
+        }
+
+        private static bool WildcardMatches(string value, string pattern)
+        {
+            var regex = "^" + Regex.Escape(pattern).Replace("\\*", ".*").Replace("\\?", ".") + "$";
+            return Regex.IsMatch(value, regex);
         }
 
         private static string RunGit(string workingDirectory, string arguments)

@@ -1,1 +1,5 @@
 GetVersionSG.Sample
+V*
+
+[CommitInfoGetter]
+public static string DefVersion() => $"{BuildInfo.Tags}-{BuildInfo.Distance}";
