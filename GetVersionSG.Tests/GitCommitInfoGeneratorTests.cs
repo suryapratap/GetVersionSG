@@ -14,7 +14,7 @@ public sealed class GitCommitInfoGeneratorTests
     {
         var metadata = new GitCommitInfoGenerator.GitMetadata(
             "abc123",
-            "v1.2.3",
+            "v1.2.3\nv1.2.2",
             "7",
             "feature/test");
 
@@ -22,7 +22,7 @@ public sealed class GitCommitInfoGeneratorTests
 
         Assert.Contains("public static class BuildInfo", source);
         Assert.Contains("public const string CommitHash = \"abc123\";", source);
-        Assert.Contains("public const string Tag = \"v1.2.3\";", source);
+        Assert.Contains("public const string Tags = \"v1.2.3\\nv1.2.2\";", source);
         Assert.Contains("public const string Distance = \"7\";", source);
         Assert.Contains("public const string BranchName = \"feature/test\";", source);
     }
@@ -42,6 +42,17 @@ public sealed class GitCommitInfoGeneratorTests
     }
 
     [Fact]
+    public void GitMetadataReadsTagsFromNearestTaggedCommit()
+    {
+        var repositoryPath = Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, ".."));
+
+        var metadata = GitCommitInfoGenerator.GitMetadata.Read(repositoryPath);
+
+        Assert.Equal("V0.0.1", metadata.Tags);
+        Assert.Equal("3", metadata.Distance);
+    }
+
+    [Fact]
     public void GeneratorReadsCommitInfoNamespaceAndClassName()
     {
         var additionalText = new TestAdditionalText(
@@ -57,7 +68,7 @@ public sealed class GitCommitInfoGeneratorTests
                     public static class CustomValues
                     {
                         [CommitInfoGetter]
-                        public static string Version() => Tag + "." + Distance;
+                        public static string Version() => Tags + "." + Distance;
                     }
                     """)
             });
@@ -70,7 +81,7 @@ public sealed class GitCommitInfoGeneratorTests
             .Single(source => source.HintName == "BuildInfo.g.cs").SourceText.ToString();
         Assert.Contains("namespace Demo.Generated;", generated);
         Assert.Contains("public static class BuildInfo", generated);
-        Assert.Contains("public const string Version = Tag + \".\" + Distance;", generated);
+        Assert.Contains("public const string Version = Tags + \".\" + Distance;", generated);
     }
 
     private sealed class TestAdditionalText : AdditionalText

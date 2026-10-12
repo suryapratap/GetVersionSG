@@ -133,31 +133,34 @@ public sealed class GitCommitInfoGenerator : IIncrementalGenerator
 
     internal sealed class GitMetadata
     {
-        internal GitMetadata(string commitHash, string tag, string distance, string branchName)
+        internal GitMetadata(string commitHash, string tags, string distance, string branchName)
         {
             CommitHash = commitHash;
-            Tag = tag;
+            Tags = tags;
             Distance = distance;
             BranchName = branchName;
         }
 
         public string CommitHash { get; }
-        public string Tag { get; }
+        public string Tags { get; }
         public string Distance { get; }
         public string BranchName { get; }
 
         public static GitMetadata Read(string workingDirectory)
         {
             var commitHash = RunGit(workingDirectory, "rev-parse HEAD");
-            var tag = RunGit(workingDirectory, "describe --tags --abbrev=0 HEAD");
-            var distance = string.IsNullOrWhiteSpace(tag)
+            var nearestTag = RunGit(workingDirectory, "describe --tags --abbrev=0 HEAD");
+            var tags = string.IsNullOrWhiteSpace(nearestTag)
+                ? string.Empty
+                : RunGit(workingDirectory, "tag --points-at " + nearestTag);
+            var distance = string.IsNullOrWhiteSpace(nearestTag)
                 ? "0"
-                : RunGit(workingDirectory, "rev-list --count " + tag + "..HEAD");
+                : RunGit(workingDirectory, "rev-list --count " + nearestTag + "..HEAD");
             var branch = RunGit(workingDirectory, "rev-parse --abbrev-ref HEAD");
 
             return new GitMetadata(
                 commitHash,
-                string.IsNullOrWhiteSpace(tag) ? "" : tag,
+                string.IsNullOrWhiteSpace(tags) ? "" : tags,
                 string.IsNullOrWhiteSpace(distance) ? "0" : distance,
                 string.IsNullOrWhiteSpace(branch) ? "HEAD" : branch);
         }
@@ -207,7 +210,7 @@ public sealed class GitCommitInfoGenerator : IIncrementalGenerator
             builder.Append("public static class ").Append(className).AppendLine();
             builder.AppendLine("{");
             WriteConstant(builder, "CommitHash", metadata.CommitHash);
-            WriteConstant(builder, "Tag", metadata.Tag);
+            WriteConstant(builder, "Tags", metadata.Tags);
             WriteConstant(builder, "Distance", metadata.Distance);
             WriteConstant(builder, "BranchName", metadata.BranchName);
             if (!getters.IsDefault)

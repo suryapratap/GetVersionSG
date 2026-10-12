@@ -15,13 +15,13 @@ The package automatically includes root `.commit-info` files as compiler additio
 
 ```csharp
 MyBuildInfo.CommitHash
-MyBuildInfo.Tag
+MyBuildInfo.Tags
 MyBuildInfo.Distance
 MyBuildInfo.BranchName
 MyBuildInfo.Version
 ```
 
-The values are read from the repository containing the `.commit-info` file. `Tag` is the nearest tag reachable from `HEAD`; `Distance` is the number of commits from that tag. Untagged repositories use an empty tag and a distance of `0`, while detached HEAD uses `HEAD` as the branch name.
+The values are read from the repository containing the `.commit-info` file. `Tags` contains all tags on the nearest tagged commit, separated by newlines; `Distance` is the number of commits from that commit. Untagged repositories use empty tags and a distance of `0`, while detached HEAD uses `HEAD` as the branch name.
 
 Additional compile-time constants can be defined with parameterless static string methods marked with `CommitInfoGetter`. Place the methods in a separate helper class (a C# method and constant cannot have the same name in one class), and return a C# constant expression using the generated metadata names:
 
@@ -33,7 +33,7 @@ namespace MyCompany.Product.Build;
 public static class BuildInfoGetters
 {
     [CommitInfoGetter]
-    public static string Version() => MyBuildInfo.Tag + "." + MyBuildInfo.Distance;
+    public static string Version() => MyBuildInfo.Tags + "." + MyBuildInfo.Distance;
 }
 ```
 
